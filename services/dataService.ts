@@ -1,6 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { 
-  collection, query, where, onSnapshot, addDoc, updateDoc, doc, Timestamp 
+  collection, query, where, onSnapshot, addDoc, updateDoc, doc, Timestamp, writeBatch 
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useStore } from '../store/useStore';
@@ -13,94 +13,108 @@ export const useDataSync = () => {
     setWorkspaces, setProjects, setTasks, setNotes, setFiles, setCurrentWorkspaceId 
   } = useStore();
 
-  // Sync Workspaces for User
+  // Refs to track unsubscribes for nested listeners
+  const workspacesUnsubRef = useRef<() => void | undefined>(undefined);
+
+  // 1. Sync User's Workspace Memberships
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setWorkspaces([]);
+      return;
+    }
 
     const q = query(
       collection(db, COLLECTIONS.WORKSPACE_MEMBERS),
       where('userId', '==', user.uid)
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const unsubscribeMembers = onSnapshot(q, (snapshot) => {
       const workspaceIds = snapshot.docs.map(d => d.data().workspaceId);
       
+      // Clean up previous workspaces listener
+      if (workspacesUnsubRef.current) {
+        workspacesUnsubRef.current();
+        workspacesUnsubRef.current = undefined;
+      }
+
       if (workspaceIds.length === 0) {
         setWorkspaces([]);
         return;
       }
 
+      // Create new workspaces listener
+      // Firestore 'in' query supports up to 10 items. 
+      // For production, batching logic would be needed for >10 workspaces.
+      const safeIds = workspaceIds.slice(0, 10);
+      
       const wsQuery = query(
         collection(db, COLLECTIONS.WORKSPACES),
-        where('__name__', 'in', workspaceIds.slice(0, 10))
+        where('__name__', 'in', safeIds)
       );
 
-      onSnapshot(wsQuery, (wsSnap) => {
+      workspacesUnsubRef.current = onSnapshot(wsQuery, (wsSnap) => {
         const workspaces = wsSnap.docs.map(d => ({ id: d.id, ...d.data() } as any));
         setWorkspaces(workspaces);
         
-        // Auto-select first workspace if none selected
-        if (!currentWorkspaceId && workspaces.length > 0) {
+        // Auto-select logic
+        const state = useStore.getState(); // Get fresh state
+        if (!state.currentWorkspaceId && workspaces.length > 0) {
           setCurrentWorkspaceId(workspaces[0].id);
         }
       }, (error) => {
-        console.error("Error fetching workspaces:", error);
+        console.error("Error syncing workspaces:", error);
       });
+
     }, (error) => {
-      console.error("Error fetching members:", error);
+      console.error("Error syncing members:", error);
     });
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribeMembers();
+      if (workspacesUnsubRef.current) workspacesUnsubRef.current();
+    };
   }, [user]);
 
-  // Sync Workspace Data
-  // NOTE: Removed server-side orderBy to avoid needing manual Composite Indexes in Firebase Console.
-  // We will trust the default order or sort client-side if needed.
+  // 2. Sync Workspace Data (Projects, Tasks, etc.)
   useEffect(() => {
-    if (!currentWorkspaceId) return;
+    if (!currentWorkspaceId) {
+      setProjects([]);
+      setTasks([]);
+      setNotes([]);
+      setFiles([]);
+      return;
+    }
 
-    const projectsQ = query(
-      collection(db, COLLECTIONS.PROJECTS),
-      where('workspaceId', '==', currentWorkspaceId)
-    );
-    
-    const tasksQ = query(
-      collection(db, COLLECTIONS.TASKS),
-      where('workspaceId', '==', currentWorkspaceId)
-    );
+    // Queries
+    const projectsQ = query(collection(db, COLLECTIONS.PROJECTS), where('workspaceId', '==', currentWorkspaceId));
+    const tasksQ = query(collection(db, COLLECTIONS.TASKS), where('workspaceId', '==', currentWorkspaceId));
+    const notesQ = query(collection(db, COLLECTIONS.NOTES), where('workspaceId', '==', currentWorkspaceId));
+    const filesQ = query(collection(db, COLLECTIONS.FILES), where('workspaceId', '==', currentWorkspaceId));
 
-    const notesQ = query(
-      collection(db, COLLECTIONS.NOTES),
-      where('workspaceId', '==', currentWorkspaceId)
-    );
-
-    const filesQ = query(
-      collection(db, COLLECTIONS.FILES),
-      where('workspaceId', '==', currentWorkspaceId)
-    );
-
+    // Listeners
     const unsubP = onSnapshot(projectsQ, (s) => {
         const data = s.docs.map(d => ({ id: d.id, ...d.data() } as any));
-        // Sort client-side
-        data.sort((a, b) => b.createdAt?.seconds - a.createdAt?.seconds);
+        data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
         setProjects(data);
-    }, (e) => console.error("Projects sync error:", e));
+    }, e => console.error("Projects sync error", e));
 
     const unsubT = onSnapshot(tasksQ, (s) => {
-        setTasks(s.docs.map(d => ({ id: d.id, ...d.data() } as any)));
-    }, (e) => console.error("Tasks sync error:", e));
+        const data = s.docs.map(d => ({ id: d.id, ...d.data() } as any));
+        // Sort tasks client side if needed, or rely on UI
+        setTasks(data);
+    }, e => console.error("Tasks sync error", e));
 
     const unsubN = onSnapshot(notesQ, (s) => {
         const data = s.docs.map(d => ({ id: d.id, ...d.data() } as any));
-        data.sort((a, b) => b.updatedAt?.seconds - a.updatedAt?.seconds);
+        data.sort((a, b) => (b.updatedAt?.seconds || 0) - (a.updatedAt?.seconds || 0));
         setNotes(data);
-    }, (e) => console.error("Notes sync error:", e));
+    }, e => console.error("Notes sync error", e));
 
     const unsubF = onSnapshot(filesQ, (s) => {
         const data = s.docs.map(d => ({ id: d.id, ...d.data() } as any));
-        data.sort((a, b) => b.createdAt?.seconds - a.createdAt?.seconds);
+        data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
         setFiles(data);
-    }, (e) => console.error("Files sync error:", e));
+    }, e => console.error("Files sync error", e));
 
     return () => {
       unsubP(); unsubT(); unsubN(); unsubF();

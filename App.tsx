@@ -51,42 +51,39 @@ const App: React.FC = () => {
     let unsubscribeAuth: (() => void) | undefined;
 
     const init = async () => {
-      try {
-        await hydrateStore();
-      } catch (err) {
-        console.warn("Local hydration failed, proceeding with fresh state", err);
-      }
+      // 1. Start Hydration (Non-blocking)
+      hydrateStore().catch(err => console.warn("Hydration warning:", err));
 
+      // 2. Listen for Auth Changes
       unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
-        if (firebaseUser) {
-          // Fetch extended user details
-          try {
-            const userSnap = await getDoc(doc(db, COLLECTIONS.USERS, firebaseUser.uid));
-            if (userSnap.exists()) {
+        try {
+          if (firebaseUser) {
+            // Attempt to fetch user profile
+            const userRef = doc(db, COLLECTIONS.USERS, firebaseUser.uid);
+            const userSnap = await getDoc(userRef).catch(e => null);
+
+            if (userSnap && userSnap.exists()) {
               setUser({ uid: firebaseUser.uid, ...userSnap.data() } as any);
             } else {
-              // Fallback for just-created users or partial auth
+              // Fallback if DB fetch fails or doc doesn't exist yet
               setUser({ 
                   uid: firebaseUser.uid, 
                   displayName: firebaseUser.displayName, 
                   email: firebaseUser.email, 
-                  photoURL: firebaseUser.photoURL 
+                  photoURL: firebaseUser.photoURL,
+                  timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
               } as any);
             }
-          } catch (e) {
-              console.error("Error fetching user details", e);
-              // Set basic user anyway to allow access
-              setUser({ 
-                uid: firebaseUser.uid, 
-                displayName: firebaseUser.displayName, 
-                email: firebaseUser.email, 
-                photoURL: firebaseUser.photoURL 
-            } as any);
+          } else {
+            setUser(null);
           }
-        } else {
+        } catch (error) {
+          console.error("Auth state change error:", error);
           setUser(null);
+        } finally {
+          // Critical: Always stop loading
+          setLoading(false);
         }
-        setLoading(false);
       });
     };
 
