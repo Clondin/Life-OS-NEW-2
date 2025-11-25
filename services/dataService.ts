@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { 
-  collection, query, where, onSnapshot, addDoc, updateDoc, doc, Timestamp, orderBy 
+  collection, query, where, onSnapshot, addDoc, updateDoc, doc, Timestamp 
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useStore } from '../store/useStore';
@@ -30,12 +30,9 @@ export const useDataSync = () => {
         return;
       }
 
-      // In a real app we might need to batch fetch if > 10, or rely on a separate 'users/{uid}/workspaces' map.
-      // For this scale, we fetch all workspaces where ID is in the list.
-      // Note: 'in' query supports up to 10. We'll assume small scale or implement better later.
       const wsQuery = query(
         collection(db, COLLECTIONS.WORKSPACES),
-        where('__name__', 'in', workspaceIds.slice(0, 10)) // Limit to 10 for safety
+        where('__name__', 'in', workspaceIds.slice(0, 10))
       );
 
       onSnapshot(wsQuery, (wsSnap) => {
@@ -46,20 +43,25 @@ export const useDataSync = () => {
         if (!currentWorkspaceId && workspaces.length > 0) {
           setCurrentWorkspaceId(workspaces[0].id);
         }
+      }, (error) => {
+        console.error("Error fetching workspaces:", error);
       });
+    }, (error) => {
+      console.error("Error fetching members:", error);
     });
 
     return () => unsubscribe();
   }, [user]);
 
-  // Sync Workspace Data (Projects, Tasks, Notes, Files)
+  // Sync Workspace Data
+  // NOTE: Removed server-side orderBy to avoid needing manual Composite Indexes in Firebase Console.
+  // We will trust the default order or sort client-side if needed.
   useEffect(() => {
     if (!currentWorkspaceId) return;
 
     const projectsQ = query(
       collection(db, COLLECTIONS.PROJECTS),
-      where('workspaceId', '==', currentWorkspaceId),
-      orderBy('createdAt', 'desc')
+      where('workspaceId', '==', currentWorkspaceId)
     );
     
     const tasksQ = query(
@@ -69,20 +71,36 @@ export const useDataSync = () => {
 
     const notesQ = query(
       collection(db, COLLECTIONS.NOTES),
-      where('workspaceId', '==', currentWorkspaceId),
-      orderBy('updatedAt', 'desc')
+      where('workspaceId', '==', currentWorkspaceId)
     );
 
     const filesQ = query(
       collection(db, COLLECTIONS.FILES),
-      where('workspaceId', '==', currentWorkspaceId),
-      orderBy('createdAt', 'desc')
+      where('workspaceId', '==', currentWorkspaceId)
     );
 
-    const unsubP = onSnapshot(projectsQ, (s) => setProjects(s.docs.map(d => ({ id: d.id, ...d.data() } as any))));
-    const unsubT = onSnapshot(tasksQ, (s) => setTasks(s.docs.map(d => ({ id: d.id, ...d.data() } as any))));
-    const unsubN = onSnapshot(notesQ, (s) => setNotes(s.docs.map(d => ({ id: d.id, ...d.data() } as any))));
-    const unsubF = onSnapshot(filesQ, (s) => setFiles(s.docs.map(d => ({ id: d.id, ...d.data() } as any))));
+    const unsubP = onSnapshot(projectsQ, (s) => {
+        const data = s.docs.map(d => ({ id: d.id, ...d.data() } as any));
+        // Sort client-side
+        data.sort((a, b) => b.createdAt?.seconds - a.createdAt?.seconds);
+        setProjects(data);
+    }, (e) => console.error("Projects sync error:", e));
+
+    const unsubT = onSnapshot(tasksQ, (s) => {
+        setTasks(s.docs.map(d => ({ id: d.id, ...d.data() } as any)));
+    }, (e) => console.error("Tasks sync error:", e));
+
+    const unsubN = onSnapshot(notesQ, (s) => {
+        const data = s.docs.map(d => ({ id: d.id, ...d.data() } as any));
+        data.sort((a, b) => b.updatedAt?.seconds - a.updatedAt?.seconds);
+        setNotes(data);
+    }, (e) => console.error("Notes sync error:", e));
+
+    const unsubF = onSnapshot(filesQ, (s) => {
+        const data = s.docs.map(d => ({ id: d.id, ...d.data() } as any));
+        data.sort((a, b) => b.createdAt?.seconds - a.createdAt?.seconds);
+        setFiles(data);
+    }, (e) => console.error("Files sync error:", e));
 
     return () => {
       unsubP(); unsubT(); unsubN(); unsubF();

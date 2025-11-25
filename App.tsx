@@ -48,36 +48,53 @@ const App: React.FC = () => {
   const { setUser } = useStore();
 
   useEffect(() => {
-    // 1. Hydrate local state
-    hydrateStore().then(() => {
-        // 2. Check Auth
-        const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-          if (firebaseUser) {
-            // Fetch extended user details
-            try {
-              const userSnap = await getDoc(doc(db, COLLECTIONS.USERS, firebaseUser.uid));
-              if (userSnap.exists()) {
-                setUser({ uid: firebaseUser.uid, ...userSnap.data() } as any);
-              } else {
-                // Fallback for just-created users or partial auth
-                setUser({ 
-                    uid: firebaseUser.uid, 
-                    displayName: firebaseUser.displayName, 
-                    email: firebaseUser.email, 
-                    photoURL: firebaseUser.photoURL 
-                } as any);
-              }
-            } catch (e) {
-                console.error("Error fetching user details", e);
-            }
-          } else {
-            setUser(null);
-          }
-          setLoading(false);
-        });
+    let unsubscribeAuth: (() => void) | undefined;
 
-        return () => unsubscribe();
-    });
+    const init = async () => {
+      try {
+        await hydrateStore();
+      } catch (err) {
+        console.warn("Local hydration failed, proceeding with fresh state", err);
+      }
+
+      unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+        if (firebaseUser) {
+          // Fetch extended user details
+          try {
+            const userSnap = await getDoc(doc(db, COLLECTIONS.USERS, firebaseUser.uid));
+            if (userSnap.exists()) {
+              setUser({ uid: firebaseUser.uid, ...userSnap.data() } as any);
+            } else {
+              // Fallback for just-created users or partial auth
+              setUser({ 
+                  uid: firebaseUser.uid, 
+                  displayName: firebaseUser.displayName, 
+                  email: firebaseUser.email, 
+                  photoURL: firebaseUser.photoURL 
+              } as any);
+            }
+          } catch (e) {
+              console.error("Error fetching user details", e);
+              // Set basic user anyway to allow access
+              setUser({ 
+                uid: firebaseUser.uid, 
+                displayName: firebaseUser.displayName, 
+                email: firebaseUser.email, 
+                photoURL: firebaseUser.photoURL 
+            } as any);
+          }
+        } else {
+          setUser(null);
+        }
+        setLoading(false);
+      });
+    };
+
+    init();
+
+    return () => {
+      if (unsubscribeAuth) unsubscribeAuth();
+    };
   }, []);
 
   if (loading) return <Loading />;
