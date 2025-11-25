@@ -11,6 +11,7 @@ import { useDataSync } from './services/dataService';
 import { Login } from './pages/Login';
 import { Home } from './pages/Home';
 import { Projects } from './pages/Projects';
+import { ProjectDetail } from './pages/ProjectDetail';
 import { Tasks } from './pages/Tasks';
 import { Notes } from './pages/Notes';
 import { Files } from './pages/Files';
@@ -90,7 +91,7 @@ const App: React.FC = () => {
         
         <Route path={ROUTES.HOME} element={<ProtectedRoute><Home /></ProtectedRoute>} />
         <Route path={ROUTES.PROJECTS} element={<ProtectedRoute><Projects /></ProtectedRoute>} />
-        <Route path={ROUTES.PROJECT_DETAIL} element={<ProtectedRoute><div>Project Detail (Placeholder)</div></ProtectedRoute>} />
+        <Route path={ROUTES.PROJECT_DETAIL} element={<ProtectedRoute><ProjectDetail /></ProtectedRoute>} />
         <Route path={ROUTES.TASKS} element={<ProtectedRoute><Tasks /></ProtectedRoute>} />
         <Route path={ROUTES.NOTES} element={<ProtectedRoute><Notes /></ProtectedRoute>} />
         <Route path={ROUTES.FILES} element={<ProtectedRoute><Files /></ProtectedRoute>} />

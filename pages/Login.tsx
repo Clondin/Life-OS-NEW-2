@@ -37,7 +37,9 @@ export const Login: React.FC = () => {
           updatedAt: serverTimestamp()
         });
 
-        await addDoc(collection(db, COLLECTIONS.WORKSPACE_MEMBERS), {
+        // Use a composite ID for membership to easily check existence/rules later
+        const memberId = `${wsRef.id}_${user.uid}`;
+        await setDoc(doc(db, COLLECTIONS.WORKSPACE_MEMBERS, memberId), {
           workspaceId: wsRef.id,
           userId: user.uid,
           role: 'owner',
